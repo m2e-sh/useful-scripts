@@ -24,11 +24,26 @@ THE SOFTWARE.
 """
 
 import os
+import re
 import click
 from pathlib import Path
 from datetime import datetime
 from PIL import Image
 from PIL.ExifTags import TAGS
+
+# Supported image and video formats
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".tiff", ".bmp", ".webp"}
+VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv", ".mpeg", ".3gp", ".webm"}
+
+
+def is_already_renamed(filename: str) -> bool:
+    """
+    Check if a filename already follows the YYYYMMDD-HHMMSS format.
+
+    :param filename: Name of the file.
+    :return: True if the filename already matches the format, otherwise False.
+    """
+    return bool(re.match(r"^\d{8}-\d{6}\..+\..+$", filename))
 
 
 def get_exif_datetime(image_path: Path) -> datetime | None:
@@ -48,7 +63,6 @@ def get_exif_datetime(image_path: Path) -> datetime | None:
                 tag_name = TAGS.get(tag, tag)
                 if tag_name == "DateTimeOriginal":
                     return datetime.strptime(value, "%Y:%m:%d %H:%M:%S")
-
     except Exception:
         return None
 
@@ -72,6 +86,16 @@ def get_file_creation_datetime(file_path: Path) -> datetime | None:
         return None  # No creation time available
 
 
+def get_file_modification_datetime(file_path: Path) -> datetime:
+    """
+    Get the file's last modification date as a fallback.
+
+    :param file_path: Path to the file.
+    :return: Datetime object representing last modification date.
+    """
+    return datetime.fromtimestamp(file_path.stat().st_mtime)
+
+
 def generate_new_filename(file_path: Path, timestamp: datetime) -> str:
     """
     Generate a new filename based on the timestamp.
@@ -84,21 +108,24 @@ def generate_new_filename(file_path: Path, timestamp: datetime) -> str:
     return f"{formatted_date}.{file_path.stem}{file_path.suffix}"
 
 
-def rename_images_in_directory(directory: Path) -> None:
+def rename_media_files(directory: Path) -> None:
     """
-    Rename all image files in the specified directory.
+    Rename all image and video files in the specified directory.
 
     :param directory: Path to the target directory.
     """
     for file_path in directory.iterdir():
-        if file_path.is_file() and file_path.suffix.lower() in {".jpg", ".jpeg", ".png"}:
-            exif_datetime = get_exif_datetime(file_path)
-            creation_datetime = get_file_creation_datetime(file_path)
-
-            timestamp = exif_datetime or creation_datetime
-            if not timestamp:
-                click.echo(f"Skipping {file_path.name}: No date available.")
+        if file_path.is_file() and file_path.suffix.lower() in IMAGE_EXTENSIONS | VIDEO_EXTENSIONS:
+            if is_already_renamed(file_path.name):
+                click.echo(f"Skipping {file_path.name}: Already renamed.")
                 continue
+
+            timestamp = None
+            if file_path.suffix.lower() in IMAGE_EXTENSIONS:
+                timestamp = get_exif_datetime(file_path) or get_file_creation_datetime(file_path)
+
+            if not timestamp:
+                timestamp = get_file_modification_datetime(file_path)
 
             new_filename = generate_new_filename(file_path, timestamp)
             new_path = directory / new_filename
@@ -114,10 +141,11 @@ def rename_images_in_directory(directory: Path) -> None:
 @click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
 def main(directory: Path) -> None:
     """
-    Rename all images in DIRECTORY based on their metadata or file creation date.
-    Prioritizes EXIF metadata over system creation date.
+    Rename all images and videos in DIRECTORY based on their metadata or file creation date.
+    Prioritizes EXIF metadata (for images), then file creation date, and finally modification date.
+    Skips files that are already renamed.
     """
-    rename_images_in_directory(directory)
+    rename_media_files(directory)
 
 
 if __name__ == "__main__":
